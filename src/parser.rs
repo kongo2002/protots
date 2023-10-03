@@ -112,6 +112,10 @@ pub enum Elem {
     Package {
         name: String,
     },
+    Extend {
+        name: String,
+        fields: Vec<Field>,
+    },
     Service {
         name: String,
         endpoints: Vec<Rpc>,
@@ -243,6 +247,8 @@ fn enum_value(input: &str) -> ParserResult<EnumValue> {
     let (input, name) = ws(identifier)(input)?;
     let (input, _) = tag("=")(input)?;
     let (input, idx) = ws(number)(input)?;
+    let (input, _) = opt(field_options)(input)?;
+    let (input, _) = space0(input)?;
     let (input, _) = tag(";")(input)?;
 
     Ok((
@@ -310,7 +316,23 @@ fn oneof(input: &str) -> ParserResult<Field> {
     ))
 }
 
-fn message_field_options(input: &str) -> ParserResult<()> {
+fn extend(input: &str) -> ParserResult<Elem> {
+    let (input, _) = tag("extend")(input)?;
+    let (input, name) = ws(identifier)(input)?;
+    let (input, _) = tag("{")(input)?;
+    let (input, fields) = many0(ws(message_field))(input)?;
+    let (input, _) = tag("}")(input)?;
+
+    Ok((
+        input,
+        Elem::Extend {
+            name: name.to_string(),
+            fields,
+        },
+    ))
+}
+
+fn field_options(input: &str) -> ParserResult<()> {
     let (input, _) = tag("[")(input)?;
     // TODO: not very accurate
     let (input, _) = is_not("]")(input)?;
@@ -326,7 +348,7 @@ fn message_field(input: &str) -> ParserResult<Field> {
     let (input, _) = space1(input)?;
     let (input, _) = tag("=")(input)?;
     let (input, idx) = ws(number)(input)?;
-    let (input, _) = opt(message_field_options)(input)?;
+    let (input, _) = opt(field_options)(input)?;
     let (input, _) = space0(input)?;
     let (input, _) = tag(";")(input)?;
 
@@ -485,6 +507,7 @@ fn parse0(input: &str) -> ParserResult<Proto> {
         import,
         option,
         package,
+        extend,
         map_res(message, |v| Ok::<Elem, &str>(Elem::Message(v))),
         enum0,
         service,
