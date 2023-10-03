@@ -400,14 +400,11 @@ fn parse0(input: &str) -> IResult<&str, Proto> {
     ))
 }
 
-pub fn parse(input: String) -> Result<(), PtError> {
+pub fn parse(input: String) -> Result<Proto, PtError> {
     match parse0(&input) {
-        Ok(("", proto)) => {
-            println!("{:?}", proto);
-            Ok(())
-        }
+        Ok(("", proto)) => Ok(proto),
         Ok((_, proto)) => {
-            println!("{:?}", proto);
+            eprintln!("{:?}", proto);
             Err(errors::PtError::IncompleteParsing)
         }
         Err(err) => {

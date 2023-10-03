@@ -20,12 +20,14 @@ fn process() -> Result<(), PtError> {
     let args: Vec<_> = std::env::args().collect();
     if args.len() < 2 {
         usage(&args[0]);
-        std::process::exit(1);
+        std::process::exit(2);
     };
 
     let input_file = &args[1];
     let input = read(input_file)?;
-    let _parsed = parser::parse(input)?;
+    let proto = parser::parse(input)?;
+
+    println!("{:?}", proto);
 
     Ok(())
 }
@@ -35,7 +37,7 @@ fn main() {
         Ok(()) => {}
         Err(err) => {
             eprintln!("{}", err);
-            std::process::exit(2);
+            std::process::exit(1);
         }
     }
 }
