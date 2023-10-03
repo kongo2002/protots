@@ -15,7 +15,6 @@ use nom::combinator::opt;
 use nom::combinator::recognize;
 use nom::multi::many0;
 use nom::multi::many1;
-use nom::multi::separated_list0;
 use nom::sequence::delimited;
 use nom::sequence::pair;
 use nom::sequence::preceded;
@@ -135,14 +134,14 @@ fn package(input: &str) -> IResult<&str, Elem> {
     ))
 }
 
-fn option_map_value(input: &str) -> IResult<&str, ()> {
+fn option_map_value(input: &str) -> IResult<&str, &str> {
     let (input, _name) = identifier(input)?;
     let (input, _) = ws(input)?;
     let (input, _) = tag(":")(input)?;
     let (input, _) = ws(input)?;
     let (input, _value) = option_value(input)?;
 
-    Ok((input, ()))
+    Ok((input, ""))
 }
 
 fn option_value(input: &str) -> IResult<&str, OptionValue> {
@@ -165,10 +164,7 @@ fn option_value(input: &str) -> IResult<&str, OptionValue> {
     };
     let msg = |i| {
         let (i, _) = tag("{")(i)?;
-        let (i, _) = ws(i)?;
-        // TODO: `ws` does not work here for some reason...
-        let (i, _values) = separated_list0(multispace1, option_map_value)(i)?;
-        let (i, _) = ws(i)?;
+        let (i, _values) = many0(delimited(ws, option_map_value, ws))(i)?;
         let (i, _) = tag("}")(i)?;
         Ok((
             i,
@@ -270,9 +266,7 @@ fn enum0(input: &str) -> IResult<&str, Elem> {
     let (input, name) = alphanumeric1(input)?;
     let (input, _) = multispace0(input)?;
     let (input, _) = tag("{")(input)?;
-    let (input, _) = ws(input)?;
-    let (input, values) = separated_list0(ws, alt((enum_reserved_value, enum_value)))(input)?;
-    let (input, _) = ws(input)?;
+    let (input, values) = many0(delimited(ws, alt((enum_reserved_value, enum_value)), ws))(input)?;
     let (input, _) = tag("}")(input)?;
 
     Ok((
@@ -290,9 +284,7 @@ fn oneof(input: &str) -> IResult<&str, Field> {
     let (input, name) = alphanumeric1(input)?;
     let (input, _) = space0(input)?;
     let (input, _) = tag("{")(input)?;
-    let (input, _) = multispace0(input)?;
-    let (input, fields) = separated_list0(multispace1, field)(input)?;
-    let (input, _) = multispace0(input)?;
+    let (input, fields) = many0(delimited(ws, field, ws))(input)?;
     let (input, _) = tag("}")(input)?;
 
     Ok((
@@ -367,9 +359,7 @@ fn field(input: &str) -> IResult<&str, Field> {
 
 fn rpc_opts(input: &str) -> IResult<&str, &str> {
     let (input, _) = tag("{")(input)?;
-    let (input, _) = ws(input)?;
-    let (input, _options) = separated_list0(ws, option)(input)?;
-    let (input, _) = ws(input)?;
+    let (input, _options) = many0(delimited(ws, option, ws))(input)?;
     let (input, _) = tag("}")(input)?;
 
     Ok((input, ""))
@@ -415,9 +405,7 @@ fn service(input: &str) -> IResult<&str, Elem> {
     let (input, name) = alphanumeric1(input)?;
     let (input, _) = space1(input)?;
     let (input, _) = tag("{")(input)?;
-    let (input, _) = ws(input)?;
-    let (input, rpcs) = separated_list0(ws, rpc)(input)?;
-    let (input, _) = ws(input)?;
+    let (input, rpcs) = many0(delimited(ws, rpc, ws))(input)?;
     let (input, _) = tag("}")(input)?;
 
     Ok((
@@ -435,9 +423,7 @@ fn message(input: &str) -> IResult<&str, Elem> {
     let (input, name) = alphanumeric1(input)?;
     let (input, _) = space1(input)?;
     let (input, _) = tag("{")(input)?;
-    let (input, _) = ws(input)?;
-    let (input, fields) = separated_list0(ws, field)(input)?;
-    let (input, _) = ws(input)?;
+    let (input, fields) = many0(delimited(ws, field, ws))(input)?;
     let (input, _) = tag("}")(input)?;
 
     Ok((
@@ -486,10 +472,8 @@ fn str(input: &str) -> IResult<&str, &str> {
 fn parse0(input: &str) -> IResult<&str, Proto> {
     let (input, _) = ws(input)?;
     let (input, syntax) = syntax(input)?;
-    let (input, _) = ws(input)?;
     let (input, elems) =
-        separated_list0(ws, alt((import, option, package, message, enum0, service)))(input)?;
-    let (input, _) = ws(input)?;
+        many0(delimited(ws, alt((import, option, package, message, enum0, service)), ws))(input)?;
 
     Ok((
         input,
