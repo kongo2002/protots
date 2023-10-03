@@ -6,7 +6,6 @@ use nom::bytes::complete::take_while;
 use nom::character::complete::alpha1;
 use nom::character::complete::alphanumeric1;
 use nom::character::complete::char;
-use nom::character::complete::multispace0;
 use nom::character::complete::multispace1;
 use nom::character::complete::one_of;
 use nom::character::complete::space0;
@@ -14,6 +13,7 @@ use nom::character::complete::space1;
 use nom::combinator::map_res;
 use nom::combinator::opt;
 use nom::combinator::recognize;
+use nom::error::VerboseError;
 use nom::multi::many0;
 use nom::multi::many1;
 use nom::sequence::delimited;
@@ -23,6 +23,8 @@ use nom::IResult;
 
 use crate::errors;
 use crate::errors::PtError;
+
+type ParserResult<'a, O> = IResult<&'a str, O, VerboseError<&'a str>>;
 
 #[derive(Debug)]
 pub struct Proto {
@@ -116,11 +118,9 @@ pub enum Elem {
     },
 }
 
-fn import(input: &str) -> IResult<&str, Elem> {
+fn import(input: &str) -> ParserResult<Elem> {
     let (input, _) = tag("import")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, import) = str(input)?;
-    let (input, _) = space0(input)?;
+    let (input, import) = ws(str)(input)?;
     let (input, _) = tag(";")(input)?;
 
     Ok((
@@ -131,10 +131,9 @@ fn import(input: &str) -> IResult<&str, Elem> {
     ))
 }
 
-fn package(input: &str) -> IResult<&str, Elem> {
+fn package(input: &str) -> ParserResult<Elem> {
     let (input, _) = tag("package")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, package) = is_not(";")(input)?;
+    let (input, package) = ws(is_not(";"))(input)?;
     let (input, _) = tag(";")(input)?;
 
     Ok((
@@ -145,18 +144,16 @@ fn package(input: &str) -> IResult<&str, Elem> {
     ))
 }
 
-fn option_map_value(input: &str) -> IResult<&str, &str> {
+fn option_map_value(input: &str) -> ParserResult<&str> {
     let (input, _name) = identifier(input)?;
-    let (input, _) = ws(input)?;
-    let (input, _) = tag(":")(input)?;
-    let (input, _) = ws(input)?;
+    let (input, _) = ws(tag(":"))(input)?;
     let (input, _value) = option_value(input)?;
     let (input, _) = opt(one_of(",;"))(input)?;
 
     Ok((input, ""))
 }
 
-fn option_value(input: &str) -> IResult<&str, OptionValue> {
+fn option_value(input: &str) -> ParserResult<OptionValue> {
     let str = |i| {
         let (i, value) = str(i)?;
         Ok((
@@ -176,7 +173,7 @@ fn option_value(input: &str) -> IResult<&str, OptionValue> {
     };
     let msg = |i| {
         let (i, _) = tag("{")(i)?;
-        let (i, _values) = many0(delimited(ws, option_map_value, ws))(i)?;
+        let (i, _values) = many0(ws(option_map_value))(i)?;
         let (i, _) = tag("}")(i)?;
         Ok((
             i,
@@ -190,25 +187,19 @@ fn option_value(input: &str) -> IResult<&str, OptionValue> {
     alt((str, num, bool, msg))(input)
 }
 
-fn option_name(input: &str) -> IResult<&str, &str> {
+fn option_name(input: &str) -> ParserResult<&str> {
     let (input, _) = opt(tag("("))(input)?;
-    let (input, _) = space0(input)?;
-    let (input, val) = identifier(input)?;
-    let (input, _) = space0(input)?;
+    let (input, val) = ws(identifier)(input)?;
     let (input, _) = opt(tag(")"))(input)?;
 
     Ok((input, val))
 }
 
-fn option(input: &str) -> IResult<&str, Elem> {
+fn option(input: &str) -> ParserResult<Elem> {
     let (input, _) = tag("option")(input)?;
-    let (input, _) = space0(input)?;
-    let (input, option_name) = option_name(input)?;
-    let (input, _) = space0(input)?;
+    let (input, option_name) = ws(option_name)(input)?;
     let (input, _) = tag("=")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, value) = option_value(input)?;
-    let (input, _) = ws(input)?;
+    let (input, value) = ws(option_value)(input)?;
     let (input, _) = tag(";")(input)?;
 
     Ok((
@@ -220,21 +211,17 @@ fn option(input: &str) -> IResult<&str, Elem> {
     ))
 }
 
-fn syntax(input: &str) -> IResult<&str, &str> {
+fn syntax(input: &str) -> ParserResult<&str> {
     let (input, _) = tag("syntax")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, _) = tag("=")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, version) = str(input)?;
-    let (input, _) = space0(input)?;
+    let (input, _) = ws(tag("="))(input)?;
+    let (input, version) = ws(str)(input)?;
     let (input, _) = tag(";")(input)?;
 
     Ok((input, version))
 }
 
-fn field_flag(input: &str) -> IResult<&str, Flag> {
+fn field_flag(input: &str) -> ParserResult<Flag> {
     let (input, flag0) = opt(alt((tag("optional"), tag("repeated"))))(input)?;
-    let (input, _) = space0(input)?;
     let flag = match flag0 {
         Some("optional") => Flag::Optional,
         Some("repeated") => Flag::Repeated,
@@ -244,23 +231,18 @@ fn field_flag(input: &str) -> IResult<&str, Flag> {
     Ok((input, flag))
 }
 
-fn enum_reserved_value(input: &str) -> IResult<&str, EnumValue> {
+fn enum_reserved_value(input: &str) -> ParserResult<EnumValue> {
     let (input, _) = tag("reserved")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, idx) = number(input)?;
-    let (input, _) = space0(input)?;
+    let (input, idx) = ws(number)(input)?;
     let (input, _) = tag(";")(input)?;
 
     Ok((input, EnumValue::Reserved { idx }))
 }
 
-fn enum_value(input: &str) -> IResult<&str, EnumValue> {
-    let (input, name) = not_space(input)?;
-    let (input, _) = space1(input)?;
+fn enum_value(input: &str) -> ParserResult<EnumValue> {
+    let (input, name) = ws(identifier)(input)?;
     let (input, _) = tag("=")(input)?;
-    let (input, _) = space0(input)?;
-    let (input, idx) = number(input)?;
-    let (input, _) = space0(input)?;
+    let (input, idx) = ws(number)(input)?;
     let (input, _) = tag(";")(input)?;
 
     Ok((
@@ -272,13 +254,11 @@ fn enum_value(input: &str) -> IResult<&str, EnumValue> {
     ))
 }
 
-fn enum0(input: &str) -> IResult<&str, Elem> {
+fn enum0(input: &str) -> ParserResult<Elem> {
     let (input, _) = tag("enum")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, name) = alphanumeric1(input)?;
-    let (input, _) = multispace0(input)?;
+    let (input, name) = ws(alphanumeric1)(input)?;
     let (input, _) = tag("{")(input)?;
-    let (input, values) = many0(delimited(ws, alt((enum_reserved_value, enum_value)), ws))(input)?;
+    let (input, values) = many0(ws(alt((enum_reserved_value, enum_value))))(input)?;
     let (input, _) = tag("}")(input)?;
 
     Ok((
@@ -290,25 +270,17 @@ fn enum0(input: &str) -> IResult<&str, Elem> {
     ))
 }
 
-fn proto_map(input: &str) -> IResult<&str, Field> {
+fn proto_map(input: &str) -> ParserResult<Field> {
     let (input, _) = tag("map")(input)?;
     let (input, _) = space0(input)?;
     let (input, _) = tag("<")(input)?;
-    let (input, _) = space0(input)?;
-    let (input, key_type) = identifier(input)?;
-    let (input, _) = space0(input)?;
+    let (input, key_type) = ws(identifier)(input)?;
     let (input, _) = tag(",")(input)?;
-    let (input, _) = space0(input)?;
-    let (input, value_type) = identifier(input)?;
-    let (input, _) = space0(input)?;
+    let (input, value_type) = ws(identifier)(input)?;
     let (input, _) = tag(">")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, name) = alphanumeric1(input)?;
-    let (input, _) = space1(input)?;
+    let (input, name) = ws(alphanumeric1)(input)?;
     let (input, _) = tag("=")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, idx) = number(input)?;
-    let (input, _) = space0(input)?;
+    let (input, idx) = ws(number)(input)?;
     let (input, _) = tag(";")(input)?;
 
     Ok((
@@ -322,13 +294,11 @@ fn proto_map(input: &str) -> IResult<&str, Field> {
     ))
 }
 
-fn oneof(input: &str) -> IResult<&str, Field> {
+fn oneof(input: &str) -> ParserResult<Field> {
     let (input, _) = tag("oneof")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, name) = alphanumeric1(input)?;
-    let (input, _) = space0(input)?;
+    let (input, name) = ws(alphanumeric1)(input)?;
     let (input, _) = tag("{")(input)?;
-    let (input, fields) = many0(delimited(ws, field, ws))(input)?;
+    let (input, fields) = many0(ws(field))(input)?;
     let (input, _) = tag("}")(input)?;
 
     Ok((
@@ -340,7 +310,7 @@ fn oneof(input: &str) -> IResult<&str, Field> {
     ))
 }
 
-fn message_field_options(input: &str) -> IResult<&str, ()> {
+fn message_field_options(input: &str) -> ParserResult<()> {
     let (input, _) = tag("[")(input)?;
     // TODO: not very accurate
     let (input, _) = is_not("]")(input)?;
@@ -349,16 +319,13 @@ fn message_field_options(input: &str) -> IResult<&str, ()> {
     Ok((input, ()))
 }
 
-fn message_field(input: &str) -> IResult<&str, Field> {
+fn message_field(input: &str) -> ParserResult<Field> {
     let (input, flag) = field_flag(input)?;
-    let (input, field_type) = not_space(input)?;
-    let (input, _) = space1(input)?;
-    let (input, name) = not_space(input)?;
+    let (input, field_type) = ws(identifier)(input)?;
+    let (input, name) = identifier(input)?;
     let (input, _) = space1(input)?;
     let (input, _) = tag("=")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, idx) = number(input)?;
-    let (input, _) = space0(input)?;
+    let (input, idx) = ws(number)(input)?;
     let (input, _) = opt(message_field_options)(input)?;
     let (input, _) = space0(input)?;
     let (input, _) = tag(";")(input)?;
@@ -374,7 +341,7 @@ fn message_field(input: &str) -> IResult<&str, Field> {
     ))
 }
 
-fn reserved_field(input: &str) -> IResult<&str, ReservedField> {
+fn reserved_field(input: &str) -> ParserResult<ReservedField> {
     let by_idx = map_res(number, |v| {
         Ok::<ReservedField, &str>(ReservedField::Idx { idx: v })
     });
@@ -387,17 +354,15 @@ fn reserved_field(input: &str) -> IResult<&str, ReservedField> {
     alt((by_idx, by_name))(input)
 }
 
-fn message_field_reserved(input: &str) -> IResult<&str, Field> {
+fn message_field_reserved(input: &str) -> ParserResult<Field> {
     let (input, _) = tag("reserved")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, reserved) = reserved_field(input)?;
-    let (input, _) = space0(input)?;
+    let (input, reserved) = ws(reserved_field)(input)?;
     let (input, _) = tag(";")(input)?;
 
     Ok((input, Field::Reserved(reserved)))
 }
 
-fn field(input: &str) -> IResult<&str, Field> {
+fn field(input: &str) -> ParserResult<Field> {
     alt((
         oneof,
         message_field_reserved,
@@ -407,35 +372,25 @@ fn field(input: &str) -> IResult<&str, Field> {
     ))(input)
 }
 
-fn rpc_opts(input: &str) -> IResult<&str, &str> {
+fn rpc_opts(input: &str) -> ParserResult<&str> {
     let (input, _) = tag("{")(input)?;
-    let (input, _options) = many0(delimited(ws, option, ws))(input)?;
+    let (input, _options) = many0(ws(option))(input)?;
     let (input, _) = tag("}")(input)?;
 
     Ok((input, ""))
 }
 
-fn rpc(input: &str) -> IResult<&str, Rpc> {
+fn rpc(input: &str) -> ParserResult<Rpc> {
     let (input, _) = tag("rpc")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, name) = alphanumeric1(input)?;
-    let (input, _) = space0(input)?;
+    let (input, name) = ws(alphanumeric1)(input)?;
     let (input, _) = tag("(")(input)?;
-    let (input, _) = space0(input)?;
-    let (input, request) = identifier(input)?;
-    let (input, _) = space0(input)?;
-    let (input, _) = tag(")")(input)?;
-    let (input, _) = space0(input)?;
+    let (input, request) = ws(identifier)(input)?;
+    let (input, _) = ws(tag(")"))(input)?;
     let (input, _) = tag("returns")(input)?;
-    let (input, _) = space0(input)?;
-    let (input, _) = tag("(")(input)?;
-    let (input, _) = space0(input)?;
+    let (input, _) = ws(tag("("))(input)?;
     let (input, stream) = opt(tag("stream"))(input)?;
-    let (input, _) = space0(input)?;
-    let (input, response) = identifier(input)?;
-    let (input, _) = space0(input)?;
-    let (input, _) = tag(")")(input)?;
-    let (input, _) = ws(input)?;
+    let (input, response) = ws(identifier)(input)?;
+    let (input, _) = ws(tag(")"))(input)?;
     let (input, _) = alt((rpc_opts, tag(";")))(input)?;
 
     Ok((
@@ -449,13 +404,12 @@ fn rpc(input: &str) -> IResult<&str, Rpc> {
     ))
 }
 
-fn service(input: &str) -> IResult<&str, Elem> {
+fn service(input: &str) -> ParserResult<Elem> {
     let (input, _) = tag("service")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, name) = alphanumeric1(input)?;
-    let (input, _) = delimited(ws, tag("{"), ws)(input)?;
-    let (input, rpcs) = many0(delimited(ws, rpc, ws))(input)?;
-    let (input, _) = delimited(ws, tag("}"), ws)(input)?;
+    let (input, name) = ws(alphanumeric1)(input)?;
+    let (input, _) = ws(tag("{"))(input)?;
+    let (input, rpcs) = many0(ws(rpc))(input)?;
+    let (input, _) = ws(tag("}"))(input)?;
 
     Ok((
         input,
@@ -466,13 +420,12 @@ fn service(input: &str) -> IResult<&str, Elem> {
     ))
 }
 
-fn message(input: &str) -> IResult<&str, Msg> {
+fn message(input: &str) -> ParserResult<Msg> {
     let (input, _) = tag("message")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, name) = alphanumeric1(input)?;
-    let (input, _) = delimited(ws, tag("{"), ws)(input)?;
-    let (input, fields) = many0(delimited(ws, field, ws))(input)?;
-    let (input, _) = delimited(ws, tag("}"), ws)(input)?;
+    let (input, name) = ws(alphanumeric1)(input)?;
+    let (input, _) = ws(tag("{"))(input)?;
+    let (input, fields) = many0(ws(field))(input)?;
+    let (input, _) = ws(tag("}"))(input)?;
 
     Ok((
         input,
@@ -483,11 +436,11 @@ fn message(input: &str) -> IResult<&str, Msg> {
     ))
 }
 
-fn number(input: &str) -> IResult<&str, i32> {
+fn number(input: &str) -> ParserResult<i32> {
     map_res(recognize(many1(one_of("01234567890-"))), str::parse)(input)
 }
 
-fn boolean(input: &str) -> IResult<&str, bool> {
+fn boolean(input: &str) -> ParserResult<bool> {
     let (input, value) = alt((tag("true"), tag("false")))(input)?;
     let val = match value {
         "true" => true,
@@ -497,11 +450,15 @@ fn boolean(input: &str) -> IResult<&str, bool> {
     Ok((input, val))
 }
 
-fn not_space(input: &str) -> IResult<&str, &str> {
-    is_not(" \r\n\t")(input)
+// I don't know if this "has" to be that complicated...
+fn ws<'a, T, F>(mut inner: F) -> impl FnMut(&'a str) -> ParserResult<T>
+where
+    F: FnMut(&'a str) -> ParserResult<T>,
+{
+    move |i| delimited(whitespace, &mut inner, whitespace)(i)
 }
 
-fn ws(input: &str) -> IResult<&str, &str> {
+fn whitespace(input: &str) -> ParserResult<&str> {
     let single_line_comment = preceded(tag("//"), take_while(|chr| chr != '\r' && chr != '\n'));
     let multiline_comment = delimited(tag("/*"), take_until("*/"), tag("*/"));
     recognize(many0(alt((
@@ -511,32 +468,27 @@ fn ws(input: &str) -> IResult<&str, &str> {
     ))))(input)
 }
 
-fn identifier(input: &str) -> IResult<&str, &str> {
+fn identifier(input: &str) -> ParserResult<&str> {
     recognize(pair(
         alpha1,
         many0(alt((alphanumeric1, tag("."), tag("_")))),
     ))(input)
 }
 
-fn str(input: &str) -> IResult<&str, &str> {
+fn str(input: &str) -> ParserResult<&str> {
     delimited(char('"'), is_not("\""), char('"'))(input)
 }
 
-fn parse0(input: &str) -> IResult<&str, Proto> {
-    let (input, _) = ws(input)?;
-    let (input, syntax) = syntax(input)?;
-    let (input, elems) = many0(delimited(
-        ws,
-        alt((
-            import,
-            option,
-            package,
-            map_res(message, |v| Ok::<Elem, &str>(Elem::Message(v))),
-            enum0,
-            service,
-        )),
-        ws,
-    ))(input)?;
+fn parse0(input: &str) -> ParserResult<Proto> {
+    let (input, syntax) = ws(syntax)(input)?;
+    let (input, elems) = many0(ws(alt((
+        import,
+        option,
+        package,
+        map_res(message, |v| Ok::<Elem, &str>(Elem::Message(v))),
+        enum0,
+        service,
+    ))))(input)?;
 
     Ok((
         input,
