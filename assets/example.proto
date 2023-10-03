@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package whatever.something;
+
+import "google/api/field_behavior.proto";
+import "google/type/date.proto";
+import "google/type/decimal.proto";
+import "google/type/timeofday.proto";
+import "google/protobuf/duration.proto";
+
+option go_package = "whatever.package/proto;something";
+
+option optimize_for = SPEED;
+
+//
+// single line comment
+//
+
+/*
+this one is supposed to be ignored
+message CommentedMessage {
+  string ignored = 1;
+}
+*/
+
+service Service {
+  option (google.api.default_host) = "longrunning.googleapis.com";
+
+  /** inline comment **/
+  rpc Endpoint(stream EndpointRequest)
+    returns (stream EndpointResponse);
+
+  rpc Endpoint2(Endpoint2Request) returns (Endpoint2Response) {
+  }
+
+  rpc Endpoint3(Endpoint3Request) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      post: "/v1/{name=operations/**}:cancel"
+      body: "*"
+    };
+    option (google.api.method_signature) = "name";
+  }
+
+  rpc Endpoint4(Endpoint4Request) returns (Endpoint4Response) {
+    option deprecated = true;
+  }
+}
+
+message DefaultMessage {
+  // line comment
+  string string_value = 1;
+  // line comment
+  optional string optional_string_value = 2;
+  // line comment
+  int32 int_value = 3;
+  // line comment
+  reserved 4;
+  // line comment
+  reserved 5, 6;
+  // line comment
+  reserved "some", "thing";
+
+  // line comment
+  message Nested {
+    // line comment
+    bool inner = 8;
+
+    oneof inner_oneof {
+      string inner = 9;
+    }
+
+    enum InnerEnum {
+      FOO = 10;
+    }
+  }
+
+  // line comment
+  enum NestedEnum {
+    // line comment
+    VALUE = 9;
+  };
+
+  // line comment
+  oneof duration_value {
+    // line comment
+    google.protobuf.Duration value = 10;
+    map<string, string> user_labels = 11 [(google.api.field_behavior) = OPTIONAL];
+    // yes, proto allows ugly formatting as well ;-)
+    int64 count=12;
+  };
+}
+
+message EmptyMessageWithComments {
+  // nothing to see yet
+}
+
+message EmptyMessage {};
+
+// vim: set et sts=2 sw=2:

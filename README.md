@@ -47,7 +47,7 @@ by the `protoc` but will not parse completely by `protots`.
 - properly implement and extract field options (see
   [doc](https://protobuf.dev/programming-guides/proto3/#options))
 - improve error handling/output
-- add/extend unit tests
+- extend unit tests
 
 
 [zod]: https://github.com/colinhacks/zod

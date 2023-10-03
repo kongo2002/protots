@@ -9,7 +9,6 @@ use nom::character::complete::char;
 use nom::character::complete::multispace1;
 use nom::character::complete::one_of;
 use nom::character::complete::space0;
-use nom::character::complete::space1;
 use nom::combinator::map_res;
 use nom::combinator::opt;
 use nom::combinator::recognize;
@@ -576,7 +575,7 @@ fn parse0(input: &str) -> ParserResult<Proto> {
     ))
 }
 
-pub fn parse(input: String) -> Result<Proto, PtError> {
+pub fn parse(input: &str) -> Result<Proto, PtError> {
     match parse0(&input) {
         Ok(("", proto)) => Ok(proto),
         Ok((_, proto)) => {
@@ -587,5 +586,16 @@ pub fn parse(input: String) -> Result<Proto, PtError> {
             // TODO
             Err(errors::PtError::ParsingError(err.to_string()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const TEST_INPUT: &str = std::include_str!("../assets/example.proto");
+
+    #[test]
+    fn parse_example_file_is_ok() {
+        let parsed = super::parse(TEST_INPUT);
+        assert_eq!(parsed.is_ok(), true);
     }
 }

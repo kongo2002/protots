@@ -25,7 +25,7 @@ fn process() -> Result<(), PtError> {
 
     let input_file = &args[1];
     let input = read(input_file)?;
-    let proto = parser::parse(input)?;
+    let proto = parser::parse(&input)?;
 
     println!("{:?}", proto);
 
