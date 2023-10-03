@@ -1,4 +1,8 @@
 [package]
+authors = ["kongo2002 <kongo2002@gmail.com>"]
+homepage = "https://github.com/kongo2002/protots"
+repository = "https://github.com/kongo2002/protots"
+description = "Protobuf parser to generate typescript types"
 name = "protots"
 version = "0.1.0"
 edition = "2021"
