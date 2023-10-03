@@ -38,6 +38,8 @@ pub enum Flag {
     None,
     Optional,
     Repeated,
+    // proto2 only
+    Required,
 }
 
 #[derive(Debug)]
@@ -65,15 +67,18 @@ pub enum Field {
         fields: Vec<Field>,
     },
     SubMessage(Msg),
+    SubEnum(Enum),
     Reserved(ReservedField),
+    Extensions(String, String),
 }
 
 #[derive(Debug)]
 pub struct Rpc {
     pub name: String,
     pub request: String,
+    pub stream_request: bool,
     pub response: String,
-    pub stream: bool,
+    pub stream_response: bool,
 }
 
 #[derive(Debug)]
@@ -85,6 +90,7 @@ pub enum EnumValue {
 #[derive(Debug)]
 pub enum OptionValue {
     Str { value: String },
+    Constant { value: String },
     Num { value: i32 },
     Bool { value: bool },
     Msg { value: String },
@@ -97,16 +103,28 @@ pub struct Msg {
 }
 
 #[derive(Debug)]
+pub struct Enum {
+    pub name: String,
+    pub values: Vec<EnumValue>,
+}
+
+#[derive(Debug)]
+pub struct Option {
+    pub name: String,
+    pub value: OptionValue,
+}
+
+#[derive(Debug)]
+pub enum ServiceNode {
+    Rpc(Rpc),
+    Option(Option),
+}
+
+#[derive(Debug)]
 pub enum Elem {
     Message(Msg),
-    Enum {
-        name: String,
-        values: Vec<EnumValue>,
-    },
-    Option {
-        name: String,
-        value: OptionValue,
-    },
+    Enum(Enum),
+    Option(Option),
     Import {
         name: String,
     },
@@ -119,7 +137,7 @@ pub enum Elem {
     },
     Service {
         name: String,
-        endpoints: Vec<Rpc>,
+        nodes: Vec<ServiceNode>,
     },
 }
 
@@ -158,7 +176,7 @@ fn option_map_value(input: &str) -> ParserResult<&str> {
     Ok((input, ""))
 }
 
-fn option_value(input: &str) -> ParserResult<OptionValue> {
+fn option_value<'a>(input: &'a str) -> ParserResult<OptionValue> {
     let str = |i| {
         let (i, value) = str(i)?;
         Ok((
@@ -176,10 +194,19 @@ fn option_value(input: &str) -> ParserResult<OptionValue> {
         let (i, value) = boolean(i)?;
         Ok((i, OptionValue::Bool { value }))
     };
+    let constant = |i: &'a str| {
+        let (i, value) = alphanumeric1(i)?;
+        Ok((
+            i,
+            OptionValue::Constant {
+                value: value.to_string(),
+            },
+        ))
+    };
     let msg = |i| {
         let (i, _) = tag("{")(i)?;
         let (i, _values) = many0(ws(option_map_value))(i)?;
-        let (i, _) = tag("}")(i)?;
+        let (i, _) = ws(tag("}"))(i)?;
         Ok((
             i,
             OptionValue::Msg {
@@ -189,7 +216,7 @@ fn option_value(input: &str) -> ParserResult<OptionValue> {
         ))
     };
 
-    alt((str, num, bool, msg))(input)
+    alt((str, num, bool, msg, constant))(input)
 }
 
 fn option_name(input: &str) -> ParserResult<&str> {
@@ -200,7 +227,7 @@ fn option_name(input: &str) -> ParserResult<&str> {
     Ok((input, val))
 }
 
-fn option(input: &str) -> ParserResult<Elem> {
+fn option(input: &str) -> ParserResult<Option> {
     let (input, _) = tag("option")(input)?;
     let (input, option_name) = ws(option_name)(input)?;
     let (input, _) = tag("=")(input)?;
@@ -209,7 +236,7 @@ fn option(input: &str) -> ParserResult<Elem> {
 
     Ok((
         input,
-        Elem::Option {
+        Option {
             name: option_name.to_string(),
             value,
         },
@@ -226,10 +253,11 @@ fn syntax(input: &str) -> ParserResult<&str> {
 }
 
 fn field_flag(input: &str) -> ParserResult<Flag> {
-    let (input, flag0) = opt(alt((tag("optional"), tag("repeated"))))(input)?;
+    let (input, flag0) = opt(alt((tag("optional"), tag("repeated"), tag("required"))))(input)?;
     let flag = match flag0 {
         Some("optional") => Flag::Optional,
         Some("repeated") => Flag::Repeated,
+        Some("required") => Flag::Required,
         _ => Flag::None,
     };
 
@@ -261,16 +289,17 @@ fn enum_value(input: &str) -> ParserResult<EnumValue> {
     ))
 }
 
-fn enum0(input: &str) -> ParserResult<Elem> {
+fn enum0(input: &str) -> ParserResult<Enum> {
     let (input, _) = tag("enum")(input)?;
     let (input, name) = ws(alphanumeric1)(input)?;
     let (input, _) = tag("{")(input)?;
     let (input, values) = many0(ws(alt((enum_reserved_value, enum_value))))(input)?;
-    let (input, _) = tag("}")(input)?;
+    let (input, _) = ws(tag("}"))(input)?;
+    let (input, _) = opt(tag(";"))(input)?;
 
     Ok((
         input,
-        Elem::Enum {
+        Enum {
             name: name.to_string(),
             values,
         },
@@ -285,9 +314,10 @@ fn proto_map(input: &str) -> ParserResult<Field> {
     let (input, _) = tag(",")(input)?;
     let (input, value_type) = ws(identifier)(input)?;
     let (input, _) = tag(">")(input)?;
-    let (input, name) = ws(alphanumeric1)(input)?;
+    let (input, name) = ws(identifier)(input)?;
     let (input, _) = tag("=")(input)?;
     let (input, idx) = ws(number)(input)?;
+    let (input, _) = opt(field_options)(input)?;
     let (input, _) = tag(";")(input)?;
 
     Ok((
@@ -303,10 +333,11 @@ fn proto_map(input: &str) -> ParserResult<Field> {
 
 fn oneof(input: &str) -> ParserResult<Field> {
     let (input, _) = tag("oneof")(input)?;
-    let (input, name) = ws(alphanumeric1)(input)?;
+    let (input, name) = ws(identifier)(input)?;
     let (input, _) = tag("{")(input)?;
     let (input, fields) = many0(ws(field))(input)?;
-    let (input, _) = tag("}")(input)?;
+    let (input, _) = ws(tag("}"))(input)?;
+    let (input, _) = opt(tag(";"))(input)?;
 
     Ok((
         input,
@@ -345,8 +376,7 @@ fn field_options(input: &str) -> ParserResult<()> {
 fn message_field(input: &str) -> ParserResult<Field> {
     let (input, flag) = field_flag(input)?;
     let (input, field_type) = ws(identifier)(input)?;
-    let (input, name) = identifier(input)?;
-    let (input, _) = space1(input)?;
+    let (input, name) = ws(identifier)(input)?;
     let (input, _) = tag("=")(input)?;
     let (input, idx) = ws(number)(input)?;
     let (input, _) = opt(field_options)(input)?;
@@ -362,6 +392,16 @@ fn message_field(input: &str) -> ParserResult<Field> {
             flag,
         },
     ))
+}
+
+fn extensions_field(input: &str) -> ParserResult<Field> {
+    let (input, _) = tag("extensions")(input)?;
+    let (input, from) = ws(alphanumeric1)(input)?;
+    let (input, _) = tag("to")(input)?;
+    let (input, to) = ws(alphanumeric1)(input)?;
+    let (input, _) = tag(";")(input)?;
+
+    Ok((input, Field::Extensions(from.to_string(), to.to_string())))
 }
 
 fn reserved_field(input: &str) -> ParserResult<ReservedField> {
@@ -391,54 +431,66 @@ fn field(input: &str) -> ParserResult<Field> {
         message_field_reserved,
         message_field,
         proto_map,
+        extensions_field,
         map_res(message, |v| Ok::<Field, &str>(Field::SubMessage(v))),
+        map_res(enum0, |v| Ok::<Field, &str>(Field::SubEnum(v))),
     ))(input)
 }
 
 fn rpc_opts(input: &str) -> ParserResult<&str> {
     let (input, _) = tag("{")(input)?;
+    let (input, _) = whitespace(input)?;
     let (input, _options) = many0(ws(option))(input)?;
-    let (input, _) = tag("}")(input)?;
+    let (input, _) = ws(tag("}"))(input)?;
 
     Ok((input, ""))
 }
 
-fn rpc(input: &str) -> ParserResult<Rpc> {
+fn rpc(input: &str) -> ParserResult<ServiceNode> {
     let (input, _) = tag("rpc")(input)?;
     let (input, name) = ws(alphanumeric1)(input)?;
-    let (input, _) = tag("(")(input)?;
+    let (input, _) = ws(tag("("))(input)?;
+    let (input, stream_request) = opt(tag("stream"))(input)?;
     let (input, request) = ws(identifier)(input)?;
     let (input, _) = ws(tag(")"))(input)?;
     let (input, _) = tag("returns")(input)?;
     let (input, _) = ws(tag("("))(input)?;
-    let (input, stream) = opt(tag("stream"))(input)?;
+    let (input, stream_response) = opt(tag("stream"))(input)?;
     let (input, response) = ws(identifier)(input)?;
     let (input, _) = ws(tag(")"))(input)?;
-    let (input, _) = alt((rpc_opts, tag(";")))(input)?;
+    let (input, _) = opt(rpc_opts)(input)?;
+    let (input, _) = opt(tag(";"))(input)?;
 
     Ok((
         input,
-        Rpc {
+        ServiceNode::Rpc(Rpc {
             name: name.to_string(),
             request: request.to_string(),
+            stream_request: stream_request.is_some(),
             response: response.to_string(),
-            stream: stream.is_some(),
-        },
+            stream_response: stream_response.is_some(),
+        }),
     ))
+}
+
+fn service_option(input: &str) -> ParserResult<ServiceNode> {
+    let (input, opt) = option(input)?;
+    Ok((input, ServiceNode::Option(opt)))
 }
 
 fn service(input: &str) -> ParserResult<Elem> {
     let (input, _) = tag("service")(input)?;
     let (input, name) = ws(alphanumeric1)(input)?;
     let (input, _) = ws(tag("{"))(input)?;
-    let (input, rpcs) = many0(ws(rpc))(input)?;
+    let (input, _) = whitespace(input)?;
+    let (input, nodes) = many0(ws(alt((rpc, service_option))))(input)?;
     let (input, _) = ws(tag("}"))(input)?;
 
     Ok((
         input,
         Elem::Service {
             name: name.to_string(),
-            endpoints: rpcs,
+            nodes,
         },
     ))
 }
@@ -449,6 +501,7 @@ fn message(input: &str) -> ParserResult<Msg> {
     let (input, _) = ws(tag("{"))(input)?;
     let (input, fields) = many0(ws(field))(input)?;
     let (input, _) = ws(tag("}"))(input)?;
+    let (input, _) = opt(tag(";"))(input)?;
 
     Ok((
         input,
@@ -506,11 +559,11 @@ fn parse0(input: &str) -> ParserResult<Proto> {
     let (input, syntax) = ws(syntax)(input)?;
     let (input, elems) = many0(ws(alt((
         import,
-        option,
         package,
         extend,
+        map_res(option, |v| Ok::<Elem, &str>(Elem::Option(v))),
         map_res(message, |v| Ok::<Elem, &str>(Elem::Message(v))),
-        enum0,
+        map_res(enum0, |v| Ok::<Elem, &str>(Elem::Enum(v))),
         service,
     ))))(input)?;
 
