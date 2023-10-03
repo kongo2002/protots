@@ -1,20 +1,24 @@
 use nom::branch::alt;
 use nom::bytes::complete::is_not;
 use nom::bytes::complete::tag;
-use nom::bytes::complete::take_while1;
+use nom::bytes::complete::take_while;
+use nom::character::complete::alpha1;
 use nom::character::complete::alphanumeric1;
 use nom::character::complete::char;
-use nom::character::complete::digit1;
 use nom::character::complete::multispace0;
 use nom::character::complete::multispace1;
+use nom::character::complete::one_of;
 use nom::character::complete::space0;
 use nom::character::complete::space1;
 use nom::combinator::map_res;
 use nom::combinator::opt;
 use nom::combinator::recognize;
 use nom::multi::many0;
+use nom::multi::many0_count;
+use nom::multi::many1;
 use nom::multi::separated_list0;
 use nom::sequence::delimited;
+use nom::sequence::pair;
 use nom::IResult;
 
 use crate::errors;
@@ -34,20 +38,24 @@ pub enum Flag {
 }
 
 #[derive(Debug)]
+pub enum ReservedField {
+    Idx { idx: i32 },
+    Name { name: String },
+}
+
+#[derive(Debug)]
 pub enum Field {
     Single {
         name: String,
         field_type: String,
-        idx: u32,
+        idx: i32,
         flag: Flag,
     },
     OneOf {
         name: String,
         fields: Vec<Field>,
     },
-    Reserved {
-        idx: u32,
-    },
+    Reserved(ReservedField),
 }
 
 #[derive(Debug)]
@@ -60,8 +68,15 @@ pub struct Rpc {
 
 #[derive(Debug)]
 pub enum EnumValue {
-    Single { name: String, idx: u32 },
-    Reserved { idx: u32 },
+    Single { name: String, idx: i32 },
+    Reserved { idx: i32 },
+}
+
+#[derive(Debug)]
+pub enum OptionValue {
+    Str { value: String },
+    Num { value: i32 },
+    Bool { value: bool },
 }
 
 #[derive(Debug)]
@@ -76,7 +91,7 @@ pub enum Elem {
     },
     Option {
         name: String,
-        value: String,
+        value: OptionValue,
     },
     Import {
         name: String,
@@ -84,7 +99,6 @@ pub enum Elem {
     Package {
         name: String,
     },
-    SingleLineComment,
     Service {
         name: String,
         endpoints: Vec<Rpc>,
@@ -120,11 +134,26 @@ fn package(input: &str) -> IResult<&str, Elem> {
     ))
 }
 
-fn single_line_comment(input: &str) -> IResult<&str, Elem> {
-    let (input, _) = tag("//")(input)?;
-    let (input, _) = take_while1(|chr| chr != '\r' && chr != '\n')(input)?;
+fn option_value(input: &str) -> IResult<&str, OptionValue> {
+    let str = |i| {
+        let (i, value) = str(i)?;
+        Ok((
+            i,
+            OptionValue::Str {
+                value: value.to_string(),
+            },
+        ))
+    };
+    let num = |i| {
+        let (i, value) = number(i)?;
+        Ok((i, OptionValue::Num { value }))
+    };
+    let bool = |i| {
+        let (i, value) = boolean(i)?;
+        Ok((i, OptionValue::Bool { value }))
+    };
 
-    Ok((input, Elem::SingleLineComment))
+    alt((str, num, bool))(input)
 }
 
 fn option(input: &str) -> IResult<&str, Elem> {
@@ -134,14 +163,15 @@ fn option(input: &str) -> IResult<&str, Elem> {
     let (input, _) = space1(input)?;
     let (input, _) = tag("=")(input)?;
     let (input, _) = space1(input)?;
-    let (input, value) = is_not(";")(input)?;
+    let (input, value) = option_value(input)?;
+    let (input, _) = space0(input)?;
     let (input, _) = tag(";")(input)?;
 
     Ok((
         input,
         Elem::Option {
             name: option_name.to_string(),
-            value: value.to_string(),
+            value,
         },
     ))
 }
@@ -204,10 +234,9 @@ fn enum0(input: &str) -> IResult<&str, Elem> {
     let (input, name) = alphanumeric1(input)?;
     let (input, _) = multispace0(input)?;
     let (input, _) = tag("{")(input)?;
-    let (input, _) = multispace0(input)?;
-    let (input, values) =
-        separated_list0(multispace0, alt((enum_reserved_value, enum_value)))(input)?;
-    let (input, _) = multispace0(input)?;
+    let (input, _) = ws(input)?;
+    let (input, values) = separated_list0(ws, alt((enum_reserved_value, enum_value)))(input)?;
+    let (input, _) = ws(input)?;
     let (input, _) = tag("}")(input)?;
 
     Ok((
@@ -239,6 +268,15 @@ fn oneof(input: &str) -> IResult<&str, Field> {
     ))
 }
 
+fn message_field_options(input: &str) -> IResult<&str, ()> {
+    let (input, _) = tag("[")(input)?;
+    // TODO: not very accurate
+    let (input, _) = is_not("]")(input)?;
+    let (input, _) = tag("]")(input)?;
+
+    Ok((input, ()))
+}
+
 fn message_field(input: &str) -> IResult<&str, Field> {
     let (input, flag) = field_flag(input)?;
     let (input, field_type) = not_space(input)?;
@@ -248,6 +286,9 @@ fn message_field(input: &str) -> IResult<&str, Field> {
     let (input, _) = tag("=")(input)?;
     let (input, _) = space1(input)?;
     let (input, idx) = number(input)?;
+    let (input, _) = space0(input)?;
+    let (input, _) = opt(message_field_options)(input)?;
+    let (input, _) = space0(input)?;
     let (input, _) = tag(";")(input)?;
 
     Ok((
@@ -261,18 +302,39 @@ fn message_field(input: &str) -> IResult<&str, Field> {
     ))
 }
 
+fn reserved_field(input: &str) -> IResult<&str, ReservedField> {
+    let by_idx = map_res(number, |v| {
+        Ok::<ReservedField, &str>(ReservedField::Idx { idx: v })
+    });
+    let by_name = map_res(str, |v| {
+        Ok::<ReservedField, &str>(ReservedField::Name {
+            name: v.to_string(),
+        })
+    });
+
+    alt((by_idx, by_name))(input)
+}
+
 fn message_field_reserved(input: &str) -> IResult<&str, Field> {
     let (input, _) = tag("reserved")(input)?;
     let (input, _) = space1(input)?;
-    let (input, idx) = number(input)?;
+    let (input, reserved) = reserved_field(input)?;
     let (input, _) = space0(input)?;
     let (input, _) = tag(";")(input)?;
 
-    Ok((input, Field::Reserved { idx }))
+    Ok((input, Field::Reserved(reserved)))
 }
 
 fn field(input: &str) -> IResult<&str, Field> {
     alt((oneof, message_field_reserved, message_field))(input)
+}
+
+fn rpc_opts(input: &str) -> IResult<&str, ()> {
+    let (input, _) = tag("{")(input)?;
+    let (input, _) = ws(input)?;
+    let (input, _) = tag("}")(input)?;
+
+    Ok((input, ()))
 }
 
 fn rpc(input: &str) -> IResult<&str, Rpc> {
@@ -282,7 +344,7 @@ fn rpc(input: &str) -> IResult<&str, Rpc> {
     let (input, _) = space0(input)?;
     let (input, _) = tag("(")(input)?;
     let (input, _) = space0(input)?;
-    let (input, request) = alphanumeric1(input)?;
+    let (input, request) = identifier(input)?;
     let (input, _) = space0(input)?;
     let (input, _) = tag(")")(input)?;
     let (input, _) = space0(input)?;
@@ -292,13 +354,14 @@ fn rpc(input: &str) -> IResult<&str, Rpc> {
     let (input, _) = space0(input)?;
     let (input, stream) = opt(tag("stream"))(input)?;
     let (input, _) = space0(input)?;
-    let (input, response) = alphanumeric1(input)?;
+    let (input, response) = identifier(input)?;
     let (input, _) = space0(input)?;
     let (input, _) = tag(")")(input)?;
+    let (input, _) = ws(input)?;
+    let (input, _) = opt(rpc_opts)(input)?;
+    // TODO: for some reason `ws` does not work here...
     let (input, _) = space0(input)?;
-    let (input, _) = tag("{")(input)?;
-    let (input, _) = space0(input)?;
-    let (input, _) = tag("}")(input)?;
+    let (input, _) = opt(tag(";"))(input)?;
 
     Ok((
         input,
@@ -317,9 +380,9 @@ fn service(input: &str) -> IResult<&str, Elem> {
     let (input, name) = alphanumeric1(input)?;
     let (input, _) = space1(input)?;
     let (input, _) = tag("{")(input)?;
-    let (input, _) = multispace0(input)?;
-    let (input, rpcs) = separated_list0(multispace1, rpc)(input)?;
-    let (input, _) = multispace0(input)?;
+    let (input, _) = ws(input)?;
+    let (input, rpcs) = separated_list0(ws, rpc)(input)?;
+    let (input, _) = ws(input)?;
     let (input, _) = tag("}")(input)?;
 
     Ok((
@@ -351,8 +414,18 @@ fn message(input: &str) -> IResult<&str, Elem> {
     ))
 }
 
-fn number(input: &str) -> IResult<&str, u32> {
-    map_res(recognize(digit1), str::parse)(input)
+fn number(input: &str) -> IResult<&str, i32> {
+    map_res(recognize(many1(one_of("01234567890-"))), str::parse)(input)
+}
+
+fn boolean(input: &str) -> IResult<&str, bool> {
+    let (input, value) = alt((tag("true"), tag("false")))(input)?;
+    let val = match value {
+        "true" => true,
+        "false" => false,
+        _ => unreachable!(),
+    };
+    Ok((input, val))
 }
 
 fn not_space(input: &str) -> IResult<&str, &str> {
@@ -362,11 +435,16 @@ fn not_space(input: &str) -> IResult<&str, &str> {
 fn ws(input: &str) -> IResult<&str, ()> {
     let comment = |i| {
         let (i, _) = tag("//")(i)?;
-        take_while1(|chr| chr != '\r' && chr != '\n')(i)
+        let (i, _) = take_while(|chr| chr != '\r' && chr != '\n')(i)?;
+        multispace1(i)
     };
     let (input, _) = many0(alt((multispace1, comment)))(input)?;
 
     Ok((input, ()))
+}
+
+fn identifier(input: &str) -> IResult<&str, &str> {
+    recognize(pair(alpha1, many0_count(alt((alphanumeric1, tag("."))))))(input)
 }
 
 fn str(input: &str) -> IResult<&str, &str> {
@@ -377,18 +455,8 @@ fn parse0(input: &str) -> IResult<&str, Proto> {
     let (input, _) = ws(input)?;
     let (input, syntax) = syntax(input)?;
     let (input, _) = ws(input)?;
-    let (input, elems) = separated_list0(
-        ws,
-        alt((
-            import,
-            option,
-            package,
-            message,
-            enum0,
-            service,
-            single_line_comment,
-        )),
-    )(input)?;
+    let (input, elems) =
+        separated_list0(ws, alt((import, option, package, message, enum0, service)))(input)?;
     let (input, _) = ws(input)?;
 
     Ok((
