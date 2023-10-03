@@ -1,6 +1,7 @@
 use nom::branch::alt;
 use nom::bytes::complete::is_not;
 use nom::bytes::complete::tag;
+use nom::bytes::complete::take_until;
 use nom::bytes::complete::take_while;
 use nom::character::complete::alpha1;
 use nom::character::complete::alphanumeric1;
@@ -50,10 +51,17 @@ pub enum Field {
         idx: i32,
         flag: Flag,
     },
+    Map {
+        name: String,
+        key_type: String,
+        value_type: String,
+        idx: i32,
+    },
     OneOf {
         name: String,
         fields: Vec<Field>,
     },
+    SubMessage(Msg),
     Reserved(ReservedField),
 }
 
@@ -80,11 +88,14 @@ pub enum OptionValue {
 }
 
 #[derive(Debug)]
+pub struct Msg {
+    pub name: String,
+    pub fields: Vec<Field>,
+}
+
+#[derive(Debug)]
 pub enum Elem {
-    Message {
-        name: String,
-        fields: Vec<Field>,
-    },
+    Message(Msg),
     Enum {
         name: String,
         values: Vec<EnumValue>,
@@ -140,6 +151,7 @@ fn option_map_value(input: &str) -> IResult<&str, &str> {
     let (input, _) = tag(":")(input)?;
     let (input, _) = ws(input)?;
     let (input, _value) = option_value(input)?;
+    let (input, _) = opt(one_of(",;"))(input)?;
 
     Ok((input, ""))
 }
@@ -278,6 +290,38 @@ fn enum0(input: &str) -> IResult<&str, Elem> {
     ))
 }
 
+fn proto_map(input: &str) -> IResult<&str, Field> {
+    let (input, _) = tag("map")(input)?;
+    let (input, _) = space0(input)?;
+    let (input, _) = tag("<")(input)?;
+    let (input, _) = space0(input)?;
+    let (input, key_type) = identifier(input)?;
+    let (input, _) = space0(input)?;
+    let (input, _) = tag(",")(input)?;
+    let (input, _) = space0(input)?;
+    let (input, value_type) = identifier(input)?;
+    let (input, _) = space0(input)?;
+    let (input, _) = tag(">")(input)?;
+    let (input, _) = space1(input)?;
+    let (input, name) = alphanumeric1(input)?;
+    let (input, _) = space1(input)?;
+    let (input, _) = tag("=")(input)?;
+    let (input, _) = space1(input)?;
+    let (input, idx) = number(input)?;
+    let (input, _) = space0(input)?;
+    let (input, _) = tag(";")(input)?;
+
+    Ok((
+        input,
+        Field::Map {
+            name: name.to_string(),
+            key_type: key_type.to_string(),
+            value_type: value_type.to_string(),
+            idx,
+        },
+    ))
+}
+
 fn oneof(input: &str) -> IResult<&str, Field> {
     let (input, _) = tag("oneof")(input)?;
     let (input, _) = space1(input)?;
@@ -354,7 +398,13 @@ fn message_field_reserved(input: &str) -> IResult<&str, Field> {
 }
 
 fn field(input: &str) -> IResult<&str, Field> {
-    alt((oneof, message_field_reserved, message_field))(input)
+    alt((
+        oneof,
+        message_field_reserved,
+        message_field,
+        proto_map,
+        map_res(message, |v| Ok::<Field, &str>(Field::SubMessage(v))),
+    ))(input)
 }
 
 fn rpc_opts(input: &str) -> IResult<&str, &str> {
@@ -403,10 +453,9 @@ fn service(input: &str) -> IResult<&str, Elem> {
     let (input, _) = tag("service")(input)?;
     let (input, _) = space1(input)?;
     let (input, name) = alphanumeric1(input)?;
-    let (input, _) = space1(input)?;
-    let (input, _) = tag("{")(input)?;
+    let (input, _) = delimited(ws, tag("{"), ws)(input)?;
     let (input, rpcs) = many0(delimited(ws, rpc, ws))(input)?;
-    let (input, _) = tag("}")(input)?;
+    let (input, _) = delimited(ws, tag("}"), ws)(input)?;
 
     Ok((
         input,
@@ -417,18 +466,17 @@ fn service(input: &str) -> IResult<&str, Elem> {
     ))
 }
 
-fn message(input: &str) -> IResult<&str, Elem> {
+fn message(input: &str) -> IResult<&str, Msg> {
     let (input, _) = tag("message")(input)?;
     let (input, _) = space1(input)?;
     let (input, name) = alphanumeric1(input)?;
-    let (input, _) = space1(input)?;
-    let (input, _) = tag("{")(input)?;
+    let (input, _) = delimited(ws, tag("{"), ws)(input)?;
     let (input, fields) = many0(delimited(ws, field, ws))(input)?;
-    let (input, _) = tag("}")(input)?;
+    let (input, _) = delimited(ws, tag("}"), ws)(input)?;
 
     Ok((
         input,
-        Elem::Message {
+        Msg {
             name: name.to_string(),
             fields,
         },
@@ -454,8 +502,13 @@ fn not_space(input: &str) -> IResult<&str, &str> {
 }
 
 fn ws(input: &str) -> IResult<&str, &str> {
-    let comment = preceded(tag("//"), take_while(|chr| chr != '\r' && chr != '\n'));
-    recognize(many0(alt((comment, multispace1))))(input)
+    let single_line_comment = preceded(tag("//"), take_while(|chr| chr != '\r' && chr != '\n'));
+    let multiline_comment = delimited(tag("/*"), take_until("*/"), tag("*/"));
+    recognize(many0(alt((
+        single_line_comment,
+        multiline_comment,
+        multispace1,
+    ))))(input)
 }
 
 fn identifier(input: &str) -> IResult<&str, &str> {
@@ -472,8 +525,18 @@ fn str(input: &str) -> IResult<&str, &str> {
 fn parse0(input: &str) -> IResult<&str, Proto> {
     let (input, _) = ws(input)?;
     let (input, syntax) = syntax(input)?;
-    let (input, elems) =
-        many0(delimited(ws, alt((import, option, package, message, enum0, service)), ws))(input)?;
+    let (input, elems) = many0(delimited(
+        ws,
+        alt((
+            import,
+            option,
+            package,
+            map_res(message, |v| Ok::<Elem, &str>(Elem::Message(v))),
+            enum0,
+            service,
+        )),
+        ws,
+    ))(input)?;
 
     Ok((
         input,
