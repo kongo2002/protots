@@ -14,11 +14,11 @@ use nom::combinator::map_res;
 use nom::combinator::opt;
 use nom::combinator::recognize;
 use nom::multi::many0;
-use nom::multi::many0_count;
 use nom::multi::many1;
 use nom::multi::separated_list0;
 use nom::sequence::delimited;
 use nom::sequence::pair;
+use nom::sequence::preceded;
 use nom::IResult;
 
 use crate::errors;
@@ -77,6 +77,7 @@ pub enum OptionValue {
     Str { value: String },
     Num { value: i32 },
     Bool { value: bool },
+    Msg { value: String },
 }
 
 #[derive(Debug)]
@@ -134,6 +135,16 @@ fn package(input: &str) -> IResult<&str, Elem> {
     ))
 }
 
+fn option_map_value(input: &str) -> IResult<&str, ()> {
+    let (input, _name) = identifier(input)?;
+    let (input, _) = ws(input)?;
+    let (input, _) = tag(":")(input)?;
+    let (input, _) = ws(input)?;
+    let (input, _value) = option_value(input)?;
+
+    Ok((input, ()))
+}
+
 fn option_value(input: &str) -> IResult<&str, OptionValue> {
     let str = |i| {
         let (i, value) = str(i)?;
@@ -152,19 +163,44 @@ fn option_value(input: &str) -> IResult<&str, OptionValue> {
         let (i, value) = boolean(i)?;
         Ok((i, OptionValue::Bool { value }))
     };
+    let msg = |i| {
+        let (i, _) = tag("{")(i)?;
+        let (i, _) = ws(i)?;
+        // TODO: `ws` does not work here for some reason...
+        let (i, _values) = separated_list0(multispace1, option_map_value)(i)?;
+        let (i, _) = ws(i)?;
+        let (i, _) = tag("}")(i)?;
+        Ok((
+            i,
+            OptionValue::Msg {
+                // TODO
+                value: "".to_string(),
+            },
+        ))
+    };
 
-    alt((str, num, bool))(input)
+    alt((str, num, bool, msg))(input)
+}
+
+fn option_name(input: &str) -> IResult<&str, &str> {
+    let (input, _) = opt(tag("("))(input)?;
+    let (input, _) = space0(input)?;
+    let (input, val) = identifier(input)?;
+    let (input, _) = space0(input)?;
+    let (input, _) = opt(tag(")"))(input)?;
+
+    Ok((input, val))
 }
 
 fn option(input: &str) -> IResult<&str, Elem> {
     let (input, _) = tag("option")(input)?;
-    let (input, _) = space1(input)?;
-    let (input, option_name) = not_space(input)?;
-    let (input, _) = space1(input)?;
+    let (input, _) = space0(input)?;
+    let (input, option_name) = option_name(input)?;
+    let (input, _) = space0(input)?;
     let (input, _) = tag("=")(input)?;
     let (input, _) = space1(input)?;
     let (input, value) = option_value(input)?;
-    let (input, _) = space0(input)?;
+    let (input, _) = ws(input)?;
     let (input, _) = tag(";")(input)?;
 
     Ok((
@@ -329,12 +365,14 @@ fn field(input: &str) -> IResult<&str, Field> {
     alt((oneof, message_field_reserved, message_field))(input)
 }
 
-fn rpc_opts(input: &str) -> IResult<&str, ()> {
+fn rpc_opts(input: &str) -> IResult<&str, &str> {
     let (input, _) = tag("{")(input)?;
+    let (input, _) = ws(input)?;
+    let (input, _options) = separated_list0(ws, option)(input)?;
     let (input, _) = ws(input)?;
     let (input, _) = tag("}")(input)?;
 
-    Ok((input, ()))
+    Ok((input, ""))
 }
 
 fn rpc(input: &str) -> IResult<&str, Rpc> {
@@ -358,10 +396,7 @@ fn rpc(input: &str) -> IResult<&str, Rpc> {
     let (input, _) = space0(input)?;
     let (input, _) = tag(")")(input)?;
     let (input, _) = ws(input)?;
-    let (input, _) = opt(rpc_opts)(input)?;
-    // TODO: for some reason `ws` does not work here...
-    let (input, _) = space0(input)?;
-    let (input, _) = opt(tag(";"))(input)?;
+    let (input, _) = alt((rpc_opts, tag(";")))(input)?;
 
     Ok((
         input,
@@ -432,19 +467,16 @@ fn not_space(input: &str) -> IResult<&str, &str> {
     is_not(" \r\n\t")(input)
 }
 
-fn ws(input: &str) -> IResult<&str, ()> {
-    let comment = |i| {
-        let (i, _) = tag("//")(i)?;
-        let (i, _) = take_while(|chr| chr != '\r' && chr != '\n')(i)?;
-        multispace1(i)
-    };
-    let (input, _) = many0(alt((multispace1, comment)))(input)?;
-
-    Ok((input, ()))
+fn ws(input: &str) -> IResult<&str, &str> {
+    let comment = preceded(tag("//"), take_while(|chr| chr != '\r' && chr != '\n'));
+    recognize(many0(alt((comment, multispace1))))(input)
 }
 
 fn identifier(input: &str) -> IResult<&str, &str> {
-    recognize(pair(alpha1, many0_count(alt((alphanumeric1, tag("."))))))(input)
+    recognize(pair(
+        alpha1,
+        many0(alt((alphanumeric1, tag("."), tag("_")))),
+    ))(input)
 }
 
 fn str(input: &str) -> IResult<&str, &str> {
