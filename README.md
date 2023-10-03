@@ -1,5 +1,7 @@
 # protots
 
+[![protots](https://github.com/kongo2002/protots/actions/workflows/build.yml/badge.svg)][actions]
+
 Basic protobuf parser that is built to produce typescript type definitions
 according to the message types defined in protobuf files. Preferably we want to
 produce type schemas using [zod][zod].
@@ -50,4 +52,5 @@ by the `protoc` but will not parse completely by `protots`.
 - extend unit tests
 
 
+[actions]: https://github.com/kongo2002/protots/actions/
 [zod]: https://github.com/colinhacks/zod
