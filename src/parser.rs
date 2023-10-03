@@ -16,6 +16,7 @@ use nom::combinator::recognize;
 use nom::error::VerboseError;
 use nom::multi::many0;
 use nom::multi::many1;
+use nom::multi::separated_list1;
 use nom::sequence::delimited;
 use nom::sequence::pair;
 use nom::sequence::preceded;
@@ -41,8 +42,8 @@ pub enum Flag {
 
 #[derive(Debug)]
 pub enum ReservedField {
-    Idx { idx: i32 },
-    Name { name: String },
+    Idx { idx: Vec<i32> },
+    Name { name: Vec<String> },
 }
 
 #[derive(Debug)]
@@ -364,12 +365,12 @@ fn message_field(input: &str) -> ParserResult<Field> {
 }
 
 fn reserved_field(input: &str) -> ParserResult<ReservedField> {
-    let by_idx = map_res(number, |v| {
+    let by_idx = map_res(separated_list1(ws(char(',')), number), |v| {
         Ok::<ReservedField, &str>(ReservedField::Idx { idx: v })
     });
-    let by_name = map_res(str, |v| {
+    let by_name = map_res(separated_list1(ws(char(',')), str), |v| {
         Ok::<ReservedField, &str>(ReservedField::Name {
-            name: v.to_string(),
+            name: v.into_iter().map(|v| v.to_string()).collect(),
         })
     });
 
