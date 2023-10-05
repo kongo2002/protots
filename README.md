@@ -42,6 +42,41 @@ Bottom line, don't be surprised in case you have a proto file that is accepted
 by the `protoc` but will not parse completely by `protots`.
 
 
+## Example
+
+
+### Input
+
+```proto
+syntax = "proto3";
+
+message Test {
+  optional int32 version = 1;
+  repeated string names = 2;
+
+  oneof option {
+    string foo = 3;
+    int64 bar = 4;
+  }
+}
+```
+
+
+### Output
+
+```typescript
+import { z } from "zod";
+
+export const TestSchema = z.object({
+  version: z.optional(z.number()),
+  names: z.array(z.string()),
+  option: z.union([z.object({ foo: z.string() }), z.object({ bar: z.coerce.bigint() })]),
+});
+
+export type Test = z.infer<typeof TestSchema>;
+```
+
+
 ## TODO
 
 - process all protobuf files in a directory tree at once
