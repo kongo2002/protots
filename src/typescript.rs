@@ -81,34 +81,22 @@ fn format_field(
             field_type,
             idx: _,
             flag,
-        } => {
-            if let Some(tname) = type_name(ctx, &field_type, parent) {
-                Ok(Some(format!(
-                    "{}: {}",
-                    snake_to_camel(name),
-                    flagged_field(tname, flag)
-                )))
-            } else {
-                Ok(None)
-            }
-        }
+        } => Ok(Some(format!(
+            "{}: {}",
+            snake_to_camel(name),
+            flagged_field(type_name(ctx, &field_type, parent)?, flag)
+        ))),
         Field::Map {
             name,
             key_type,
             value_type,
             idx: _,
-        } => match (
-            type_name(ctx, key_type, parent),
-            type_name(ctx, value_type, parent),
-        ) {
-            (Some(kt), Some(vt)) => Ok(Some(format!(
-                "{}: z.record({}, {})",
-                snake_to_camel(name),
-                kt,
-                vt
-            ))),
-            _ => Ok(None),
-        },
+        } => Ok(Some(format!(
+            "{}: z.record({}, {})",
+            snake_to_camel(name),
+            type_name(ctx, key_type, parent)?,
+            type_name(ctx, value_type, parent)?
+        ))),
         Field::OneOf { name, fields } => Ok(Some(format!(
             "{}: {}",
             snake_to_camel(name),
@@ -132,19 +120,19 @@ fn format_oneof(
     parent: Option<&ProtoType>,
     elements: &mut Vec<String>,
 ) -> Result<String, PtError> {
-    let cases = oneof
+    let cases: Vec<_> = oneof
         .iter()
-        .flat_map(|case| {
-            format_field(ctx, case, parent, elements)
-                .ok()?
-                .map(|value| format!("z.object({{ {} }})", value))
-        })
-        .collect::<Vec<_>>();
+        .map(|case| format_field(ctx, case, parent, elements))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .map(|value| format!("z.object({{ {} }})", value))
+        .collect();
 
     // z.union does not support single element lists
     if cases.len() == 1 {
         let single_field = &cases[0];
-        return Ok(format!("z.object({{ {} }})", single_field));
+        return Ok(single_field.to_string());
     }
 
     Ok(format!("z.union([{}])", cases.join(", ")))
@@ -200,28 +188,30 @@ fn type_name<'a>(
     ctx: &'a Context,
     type_name: &'a str,
     parent: Option<&ProtoType>,
-) -> Option<&'a str> {
+) -> Result<&'a str, PtError> {
     match type_name {
         // native types
 
         // strings
-        "string" | "bytes" => Some("z.string()"),
+        "string" | "bytes" => Ok("z.string()"),
         // numbers
         "int32" | "double" | "float" | "uint32" | "sint32" | "fixed32" | "sfixed32" => {
-            Some("z.number()")
+            Ok("z.number()")
         }
         // bigint numbers
-        "int64" | "uint64" | "fixed64" | "sfixed64" | "sint64" => Some("z.coerce.bigint()"),
+        "int64" | "uint64" | "fixed64" | "sfixed64" | "sint64" => Ok("z.coerce.bigint()"),
+
         // boolean
-        "bool" => Some("z.boolean()"),
+        "bool" => Ok("z.boolean()"),
 
         // external types
-        "google.protobuf.Timestamp" => Some("z.coerce.date()"),
+        "google.protobuf.Timestamp" => Ok("z.coerce.date()"),
 
         // try to lookup other types
         _ => ctx
             .get(type_name, parent)
-            .map(|ptype| ptype.schema.as_str()),
+            .map(|ptype| ptype.schema.as_str())
+            .ok_or(PtError::ProtobufTypeNotFound(type_name.to_string())),
     }
 }
 

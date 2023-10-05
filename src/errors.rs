@@ -1,4 +1,3 @@
-
 #[derive(thiserror::Error, Debug)]
 pub enum PtError {
     #[error("input file does not exist: {0}")]
