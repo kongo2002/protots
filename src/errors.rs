@@ -9,4 +9,6 @@ pub enum PtError {
     ParsingError(String),
     #[error("proto parsing was incomplete")]
     IncompleteParsing,
+    #[error("could not find type named: {0}")]
+    ProtobufTypeNotFound(String),
 }

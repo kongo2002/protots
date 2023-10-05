@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use crate::errors::PtError;
 use crate::parser::{Elem, Enum, EnumValue, Field, Flag, Msg, Proto};
 
 const DEFAULT_CAPACITY: usize = 10 * 1024;
 
 pub fn to_schema(proto: &Proto) -> Result<String, PtError> {
+    let ctx = Context::new(proto);
     let mut str = String::with_capacity(DEFAULT_CAPACITY);
 
     str.push_str("//\n");
@@ -17,8 +20,8 @@ pub fn to_schema(proto: &Proto) -> Result<String, PtError> {
 
     for elem in &proto.elems {
         match elem {
-            Elem::Message(msg) => str.push_str(format_msg(msg, "").as_str()),
-            Elem::Enum(e) => str.push_str(format_enum(e, "").as_str()),
+            Elem::Message(msg) => str.push_str(format_msg(&ctx, msg, None)?.as_str()),
+            Elem::Enum(e) => str.push_str(format_enum(&ctx, e, None)?.as_str()),
             _ => (),
         }
     }
@@ -26,40 +29,52 @@ pub fn to_schema(proto: &Proto) -> Result<String, PtError> {
     Ok(str)
 }
 
-fn format_msg(msg: &Msg, parent: &str) -> String {
+fn format_msg(ctx: &Context, msg: &Msg, parent: Option<&ProtoType>) -> Result<String, PtError> {
     let mut sub_messages = Vec::new();
-    let mut str = String::with_capacity(512);
-    let message_name = message_type_name(&msg.name, parent);
-    let schema_name = format!("{}Schema", message_name);
+    let mut fields = Vec::new();
 
-    str.push_str(format!("export const {} = z.object({{\n", schema_name).as_str());
+    let ptype = ctx
+        .get(&msg.name, parent)
+        .ok_or(PtError::ProtobufTypeNotFound(msg.name.clone()))?;
+    let message_name = &ptype.ts_name;
 
     for field in &msg.fields {
-        if let Some(value) = format_field(field, &message_name, &mut sub_messages) {
-            str.push_str("  ");
-            str.push_str(value.as_str());
-            str.push_str(",\n");
+        if let Some(value) = format_field(ctx, field, Some(ptype), &mut sub_messages)? {
+            fields.push(value);
         }
     }
 
-    str.push_str("});\n\n");
-
-    str.push_str(
-        format!(
-            "export type {} = z.infer<typeof {}>;\n\n",
-            message_name, schema_name
-        )
-        .as_str(),
-    );
+    let mut str = String::with_capacity(512);
 
     for sub_msg in sub_messages {
         str.push_str(&sub_msg);
     }
 
-    str
+    str.push_str(format!("export const {} = z.object({{\n", ptype.schema).as_str());
+    for field in fields {
+        str.push_str("  ");
+        str.push_str(field.as_str());
+        str.push_str(",\n");
+    }
+    str.push_str("});\n\n");
+
+    str.push_str(
+        format!(
+            "export type {} = z.infer<typeof {}>;\n\n",
+            message_name, ptype.schema
+        )
+        .as_str(),
+    );
+
+    Ok(str)
 }
 
-fn format_field(field: &Field, parent: &str, elements: &mut Vec<String>) -> Option<String> {
+fn format_field(
+    ctx: &Context,
+    field: &Field,
+    parent: Option<&ProtoType>,
+    elements: &mut Vec<String>,
+) -> Result<Option<String>, PtError> {
     match field {
         Field::Single {
             name,
@@ -67,14 +82,14 @@ fn format_field(field: &Field, parent: &str, elements: &mut Vec<String>) -> Opti
             idx: _,
             flag,
         } => {
-            if let Some(tname) = type_name(&field_type) {
-                Some(format!(
+            if let Some(tname) = type_name(ctx, &field_type, parent) {
+                Ok(Some(format!(
                     "{}: {}",
                     snake_to_camel(name),
                     flagged_field(tname, flag)
-                ))
+                )))
             } else {
-                None
+                Ok(None)
             }
         }
         Field::Map {
@@ -82,53 +97,67 @@ fn format_field(field: &Field, parent: &str, elements: &mut Vec<String>) -> Opti
             key_type,
             value_type,
             idx: _,
-        } => match (type_name(key_type), type_name(value_type)) {
-            (Some(kt), Some(vt)) => Some(format!(
+        } => match (
+            type_name(ctx, key_type, parent),
+            type_name(ctx, value_type, parent),
+        ) {
+            (Some(kt), Some(vt)) => Ok(Some(format!(
                 "{}: z.record({}, {})",
                 snake_to_camel(name),
                 kt,
                 vt
-            )),
-            _ => None,
+            ))),
+            _ => Ok(None),
         },
-        Field::OneOf { name, fields } => Some(format!(
+        Field::OneOf { name, fields } => Ok(Some(format!(
             "{}: {}",
             snake_to_camel(name),
-            format_oneof(fields, parent, elements)
-        )),
+            format_oneof(ctx, fields, parent, elements)?
+        ))),
         Field::SubMessage(msg) => {
-            elements.push(format_msg(msg, parent));
-            None
+            elements.push(format_msg(ctx, msg, parent)?);
+            Ok(None)
         }
         Field::SubEnum(e) => {
-            elements.push(format_enum(e, parent));
-            None
+            elements.push(format_enum(ctx, e, parent)?);
+            Ok(None)
         }
-        _ => None,
+        _ => Ok(None),
     }
 }
 
-fn format_oneof(oneof: &Vec<Field>, parent: &str, elements: &mut Vec<String>) -> String {
+fn format_oneof(
+    ctx: &Context,
+    oneof: &Vec<Field>,
+    parent: Option<&ProtoType>,
+    elements: &mut Vec<String>,
+) -> Result<String, PtError> {
     let cases = oneof
         .iter()
-        .flat_map(|case| format_field(case, parent, elements))
+        .flat_map(|case| {
+            format_field(ctx, case, parent, elements)
+                .ok()?
+                .map(|value| format!("z.object({{ {} }})", value))
+        })
         .collect::<Vec<_>>();
 
     // z.union does not support single element lists
     if cases.len() == 1 {
         let single_field = &cases[0];
-        return format!("z.object({{ {} }})", single_field);
+        return Ok(format!("z.object({{ {} }})", single_field));
     }
 
-    format!("z.union([{}])", cases.join(", "))
+    Ok(format!("z.union([{}])", cases.join(", ")))
 }
 
-fn format_enum(value: &Enum, parent: &str) -> String {
+fn format_enum(ctx: &Context, value: &Enum, parent: Option<&ProtoType>) -> Result<String, PtError> {
     let mut str = String::with_capacity(512);
-    let enum_name = message_type_name(&value.name, parent);
-    let schema_name = format!("{}Schema", enum_name);
+    let ptype = ctx
+        .get(&value.name, parent)
+        .ok_or(PtError::ProtobufTypeNotFound(value.name.clone()))?;
+    let enum_name = &ptype.ts_name;
 
-    str.push_str(format!("export enum {} = {{\n", enum_name).as_str());
+    str.push_str(format!("export enum {} {{\n", enum_name).as_str());
 
     for value in &value.values {
         match value {
@@ -159,15 +188,19 @@ fn format_enum(value: &Enum, parent: &str) -> String {
     str.push_str(
         format!(
             "export const {} = z.nativeEnum({}){};\n\n",
-            schema_name, enum_name, catch
+            ptype.schema, enum_name, catch
         )
         .as_str(),
     );
 
-    str
+    Ok(str)
 }
 
-fn type_name(type_name: &str) -> Option<&str> {
+fn type_name<'a>(
+    ctx: &'a Context,
+    type_name: &'a str,
+    parent: Option<&ProtoType>,
+) -> Option<&'a str> {
     match type_name {
         // native types
 
@@ -184,7 +217,11 @@ fn type_name(type_name: &str) -> Option<&str> {
 
         // external types
         "google.protobuf.Timestamp" => Some("z.coerce.date()"),
-        _ => None,
+
+        // try to lookup other types
+        _ => ctx
+            .get(type_name, parent)
+            .map(|ptype| ptype.schema.as_str()),
     }
 }
 
@@ -194,14 +231,6 @@ fn flagged_field(field: &str, flag: &Flag) -> String {
         Flag::Repeated => format!("z.array({})", field),
         Flag::None => field.to_string(),
         Flag::Required => field.to_string(),
-    }
-}
-
-fn message_type_name(name: &str, parent: &str) -> String {
-    if parent.is_empty() {
-        name.to_string()
-    } else {
-        format!("{}_{}", parent, name)
     }
 }
 
@@ -231,4 +260,90 @@ fn snake_to_camel(input: &str) -> String {
         })
         .collect::<Vec<_>>()
         .concat()
+}
+
+struct ProtoType {
+    full_name: String,
+    ts_name: String,
+    schema: String,
+}
+
+impl ProtoType {
+    fn new(name: &str, parents: Vec<String>) -> ProtoType {
+        let parts = parents
+            .into_iter()
+            .chain([name.to_string()])
+            .collect::<Vec<_>>();
+        let full_name = parts.join(".");
+        let ts_name = parts.join("_");
+        let schema = format!("{}Schema", ts_name);
+
+        ProtoType {
+            full_name,
+            ts_name,
+            schema,
+        }
+    }
+}
+
+struct Context {
+    types: HashMap<String, ProtoType>,
+}
+
+impl Context {
+    fn new(proto: &Proto) -> Context {
+        let mut map = HashMap::new();
+
+        for elem in &proto.elems {
+            match elem {
+                Elem::Message(msg) => {
+                    map.insert(msg.name.clone(), ProtoType::new(&msg.name, Vec::new()));
+
+                    for ptype in msg
+                        .fields
+                        .iter()
+                        .flat_map(|fld| Self::collect(fld, vec![msg.name.clone()]))
+                    {
+                        map.insert(ptype.full_name.clone(), ptype);
+                    }
+                }
+                Elem::Enum(e) => {
+                    map.insert(e.name.clone(), ProtoType::new(&e.name, Vec::new()));
+                }
+                _ => (),
+            }
+        }
+
+        Context { types: map }
+    }
+
+    fn get(&self, name: &str, parent: Option<&ProtoType>) -> Option<&ProtoType> {
+        // first try the name as-is
+        self.types
+            .get(name)
+            // then try with the parent's name prepended
+            .or_else(|| {
+                parent.and_then(|p| self.types.get(format!("{}.{}", p.full_name, name).as_str()))
+            })
+    }
+
+    fn collect(field: &Field, mut parent: Vec<String>) -> Vec<ProtoType> {
+        let mut types = Vec::new();
+        match field {
+            Field::SubMessage(msg) => {
+                let ptype = ProtoType::new(&msg.name, parent.clone());
+                types.push(ptype);
+
+                parent.push(msg.name.clone());
+                types.extend(
+                    msg.fields
+                        .iter()
+                        .flat_map(|fld| Self::collect(fld, parent.clone())),
+                );
+            }
+            Field::SubEnum(e) => types.push(ProtoType::new(&e.name, parent)),
+            _ => (),
+        }
+        types
+    }
 }
