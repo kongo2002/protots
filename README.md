@@ -44,7 +44,6 @@ by the `protoc` but will not parse completely by `protots`.
 
 ## TODO
 
-- implement actual typescript output
 - process all protobuf files in a directory tree at once
 - thoroughly check protobuf specs and make sure that we support *at least*
   everything that is mentioned in there
