@@ -2,6 +2,7 @@ use self::errors::PtError;
 
 mod errors;
 mod parser;
+mod typescript;
 
 fn read(input_file: &str) -> Result<String, PtError> {
     if !std::path::Path::new(input_file).exists() {
@@ -25,9 +26,10 @@ fn process() -> Result<(), PtError> {
 
     let input_file = &args[1];
     let input = read(input_file)?;
-    let proto = parser::parse(&input)?;
+    let proto = parser::parse(input_file, &input)?;
+    let ts_schema = typescript::to_schema(&proto)?;
 
-    println!("{:?}", proto);
+    println!("{}", ts_schema);
 
     Ok(())
 }

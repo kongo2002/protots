@@ -60,22 +60,27 @@ message DefaultMessage {
   // line comment
   reserved "some", "thing";
 
+  repeated string list_of_strings = 7;
+
   // line comment
   message Nested {
     // line comment
     bool inner = 8;
 
     oneof inner_oneof {
-      string inner = 9;
+      string inner_value = 9;
     }
 
     enum InnerEnum {
-      FOO = 10;
+      FOO = 1;
     }
+
+    map<string, string> user_labels = 10 [(google.api.field_behavior) = OPTIONAL];
   }
 
   // line comment
   enum NestedEnum {
+    UNKNOWN = 0;
     // line comment
     VALUE = 9;
   };
@@ -83,8 +88,7 @@ message DefaultMessage {
   // line comment
   oneof duration_value {
     // line comment
-    google.protobuf.Duration value = 10;
-    map<string, string> user_labels = 11 [(google.api.field_behavior) = OPTIONAL];
+    google.protobuf.Timestamp value = 10;
     // yes, proto allows ugly formatting as well ;-)
     int64 count=12;
   };

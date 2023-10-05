@@ -28,6 +28,7 @@ type ParserResult<'a, O> = IResult<&'a str, O, VerboseError<&'a str>>;
 
 #[derive(Debug)]
 pub struct Proto {
+    pub file: String,
     pub syntax: String,
     pub elems: Vec<Elem>,
 }
@@ -554,7 +555,7 @@ fn str(input: &str) -> ParserResult<&str> {
     delimited(char('"'), is_not("\""), char('"'))(input)
 }
 
-fn parse0(input: &str) -> ParserResult<Proto> {
+fn parse0<'a>(file_name: &'a str, input: &'a str) -> ParserResult<'a, Proto> {
     let (input, syntax) = ws(syntax)(input)?;
     let (input, elems) = many0(ws(alt((
         import,
@@ -566,17 +567,20 @@ fn parse0(input: &str) -> ParserResult<Proto> {
         service,
     ))))(input)?;
 
+    let fname = file_name.to_string();
+
     Ok((
         input,
         Proto {
+            file: fname,
             syntax: syntax.to_string(),
             elems,
         },
     ))
 }
 
-pub fn parse(input: &str) -> Result<Proto, PtError> {
-    match parse0(&input) {
+pub fn parse(file_name: &str, input: &str) -> Result<Proto, PtError> {
+    match parse0(file_name, input) {
         Ok(("", proto)) => Ok(proto),
         Ok((_, proto)) => {
             eprintln!("{:?}", proto);
@@ -595,7 +599,7 @@ mod tests {
 
     #[test]
     fn parse_example_file_is_ok() {
-        let parsed = super::parse(TEST_INPUT);
+        let parsed = super::parse("", TEST_INPUT);
         assert_eq!(parsed.is_ok(), true);
     }
 }
