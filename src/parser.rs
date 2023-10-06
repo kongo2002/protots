@@ -1,4 +1,5 @@
 use nom::branch::alt;
+use nom::bytes::complete::escaped;
 use nom::bytes::complete::is_not;
 use nom::bytes::complete::tag;
 use nom::bytes::complete::take_until;
@@ -366,8 +367,9 @@ fn extend(input: &str) -> ParserResult<Elem> {
 
 fn field_options(input: &str) -> ParserResult<()> {
     let (input, _) = tag("[")(input)?;
-    // TODO: not very accurate
-    let (input, _) = is_not("]")(input)?;
+    let (input, _) = ws(option_name)(input)?;
+    let (input, _) = tag("=")(input)?;
+    let (input, _) = ws(option_value)(input)?;
     let (input, _) = tag("]")(input)?;
 
     Ok((input, ()))
@@ -552,7 +554,11 @@ fn identifier(input: &str) -> ParserResult<&str> {
 }
 
 fn str(input: &str) -> ParserResult<&str> {
-    delimited(char('"'), is_not("\""), char('"'))(input)
+    delimited(
+        char('"'),
+        escaped(is_not("\\\""), '\\', one_of("\"\n\r")),
+        char('"'),
+    )(input)
 }
 
 fn parse0<'a>(file_name: &'a str, input: &'a str) -> ParserResult<'a, Proto> {
