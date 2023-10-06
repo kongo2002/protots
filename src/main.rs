@@ -4,6 +4,11 @@ mod errors;
 mod parser;
 mod typescript;
 
+pub struct Opts {
+    file: String,
+    verbose: bool,
+}
+
 fn read(input_file: &str) -> Result<String, PtError> {
     if !std::path::Path::new(input_file).exists() {
         return Err(PtError::FileNotFound(input_file.to_owned()));
@@ -17,16 +22,34 @@ fn usage(program: &str) {
     println!("{} <FILE> [OPTIONS]", program);
 }
 
-fn process() -> Result<(), PtError> {
-    let args: Vec<_> = std::env::args().collect();
+fn opts(mut args: Vec<String>) -> Opts {
+    let mut has_arg = |opt: &str| {
+        if let Some(idx) = args.iter().position(|val| val == opt) {
+            args.remove(idx);
+            true
+        } else {
+            false
+        }
+    };
+
+    let verbose = has_arg("-v");
+
     if args.len() < 2 {
         usage(&args[0]);
         std::process::exit(2);
-    };
+    }
 
-    let input_file = &args[1];
-    let input = read(input_file)?;
-    let proto = parser::parse(input_file, &input)?;
+    Opts {
+        file: args.remove(1),
+        verbose,
+    }
+}
+
+fn process() -> Result<(), PtError> {
+    let opts = opts(std::env::args().collect());
+
+    let input = read(&opts.file)?;
+    let proto = parser::parse(&opts, &input)?;
     let ts_schema = typescript::to_schema(&proto)?;
 
     println!("{}", ts_schema);

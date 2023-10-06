@@ -25,6 +25,7 @@ use nom::IResult;
 
 use crate::errors;
 use crate::errors::PtError;
+use crate::Opts;
 
 type ParserResult<'a, O> = IResult<&'a str, O, VerboseError<&'a str>>;
 
@@ -604,27 +605,32 @@ fn parse0<'a>(file_name: &'a str, input: &'a str) -> ParserResult<'a, Proto> {
     ))
 }
 
-pub fn parse(file_name: &str, input: &str) -> Result<Proto, PtError> {
-    match parse0(file_name, input) {
+pub fn parse(opts: &Opts, input: &str) -> Result<Proto, PtError> {
+    match parse0(&opts.file, input) {
         Ok(("", proto)) => Ok(proto),
-        Ok((_, proto)) => {
-            eprintln!("{:?}", proto);
+        Ok((_, incomplete_proto)) => {
+            if opts.verbose {
+                eprintln!("{:?}", incomplete_proto);
+            }
             Err(errors::PtError::IncompleteParsing)
         }
-        Err(err) => {
-            // TODO
-            Err(errors::PtError::ParsingError(err.to_string()))
-        }
+        Err(err) => Err(errors::PtError::ParsingError(err.to_string())),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::Opts;
+
     const TEST_INPUT: &str = std::include_str!("../assets/example.proto");
 
     #[test]
     fn parse_example_file_is_ok() {
-        let parsed = super::parse("", TEST_INPUT);
+        let opts = Opts {
+            file: "".to_string(),
+            verbose: false,
+        };
+        let parsed = super::parse(&opts, TEST_INPUT);
         assert_eq!(parsed.is_ok(), true);
     }
 }
