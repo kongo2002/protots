@@ -64,6 +64,17 @@ message DefaultMessage {
 
   // line comment
   message Nested {
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_schema) = {
+      json_schema: {
+        required: [
+          "uuid",
+          "int64_value",
+          "double_value",
+          "required_field_schema_json_name"
+        ]
+      }
+    };
+
     // line comment
     bool inner = 8;
     InnerEnum more = 23;
@@ -77,7 +88,7 @@ message DefaultMessage {
       FOO = 1;
     }
 
-    map<string, string> user_labels = 11 [(google.api.field_behavior) = OPTIONAL];
+    map<string, string> user_labels = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
   }
 
   // line comment
@@ -86,6 +97,8 @@ message DefaultMessage {
     // line comment
     VALUE = 9;
   };
+
+  repeated NestedEnum enum_list = 22;
 
   // line comment
   oneof duration_value {
@@ -100,8 +113,18 @@ message DefaultMessage {
     title: "x-correlation-id",
     description: "Unique event identifier for server requests",
     format: "uuid",
-    example: "\"2438ac3c-37eb-4902-adef-ed16b4431030\""
+    example: "\"2438ac3c-37eb-4902-adef-ed16b4431030\"",
+    required: ["float_value"],
+    extensions: {
+      key: "x-a-bit-of-everything-foo";
+      value {string_value: "bar"}
+    }
   }];
+
+  string required_field_behavior_json_name = 45 [
+    json_name = "required_field_behavior_json_name_custom",
+    (google.api.field_behavior) = REQUIRED
+  ];
 }
 
 message EmptyMessageWithComments {
@@ -109,5 +132,11 @@ message EmptyMessageWithComments {
 }
 
 message EmptyMessage {};
+
+// unusual, but allowed...
+enum snake_case_enum {
+  value_c = 0;
+  value_d = 1;
+}
 
 // vim: set et sts=2 sw=2:

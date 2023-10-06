@@ -16,6 +16,7 @@ use nom::combinator::recognize;
 use nom::error::VerboseError;
 use nom::multi::many0;
 use nom::multi::many1;
+use nom::multi::separated_list0;
 use nom::multi::separated_list1;
 use nom::sequence::delimited;
 use nom::sequence::pair;
@@ -71,6 +72,7 @@ pub enum Field {
     SubEnum(Enum),
     Reserved(ReservedField),
     Extensions(String, String),
+    Option(Option),
 }
 
 #[derive(Debug)]
@@ -94,7 +96,8 @@ pub enum OptionValue {
     Constant { value: String },
     Num { value: i32 },
     Bool { value: bool },
-    Msg { value: String },
+    Array(Vec<OptionValue>),
+    Msg,
 }
 
 #[derive(Debug)]
@@ -170,8 +173,8 @@ fn package(input: &str) -> ParserResult<Elem> {
 
 fn option_map_value(input: &str) -> ParserResult<&str> {
     let (input, _name) = identifier(input)?;
-    let (input, _) = ws(tag(":"))(input)?;
-    let (input, _value) = option_value(input)?;
+    let (input, _) = opt(ws(tag(":")))(input)?;
+    let (input, _value) = ws(option_value)(input)?;
     let (input, _) = opt(one_of(",;"))(input)?;
 
     Ok((input, ""))
@@ -196,7 +199,7 @@ fn option_value<'a>(input: &'a str) -> ParserResult<OptionValue> {
         Ok((i, OptionValue::Bool { value }))
     };
     let constant = |i: &'a str| {
-        let (i, value) = alphanumeric1(i)?;
+        let (i, value) = constant(i)?;
         Ok((
             i,
             OptionValue::Constant {
@@ -204,20 +207,20 @@ fn option_value<'a>(input: &'a str) -> ParserResult<OptionValue> {
             },
         ))
     };
+    let array = |i| {
+        let (i, _) = ws(tag("["))(i)?;
+        let (i, vs) = separated_list0(tag(","), ws(option_value))(i)?;
+        let (i, _) = ws(tag("]"))(i)?;
+        Ok((i, OptionValue::Array(vs)))
+    };
     let msg = |i| {
         let (i, _) = tag("{")(i)?;
         let (i, _values) = many0(ws(option_map_value))(i)?;
         let (i, _) = ws(tag("}"))(i)?;
-        Ok((
-            i,
-            OptionValue::Msg {
-                // TODO
-                value: "".to_string(),
-            },
-        ))
+        Ok((i, OptionValue::Msg))
     };
 
-    alt((str, num, bool, msg, constant))(input)
+    alt((str, num, bool, msg, array, constant))(input)
 }
 
 fn option_name(input: &str) -> ParserResult<&str> {
@@ -290,9 +293,9 @@ fn enum_value(input: &str) -> ParserResult<EnumValue> {
     ))
 }
 
-fn enum0(input: &str) -> ParserResult<Enum> {
+fn enum_field(input: &str) -> ParserResult<Enum> {
     let (input, _) = tag("enum")(input)?;
-    let (input, name) = ws(alphanumeric1)(input)?;
+    let (input, name) = ws(identifier)(input)?;
     let (input, _) = tag("{")(input)?;
     let (input, values) = many0(ws(alt((enum_reserved_value, enum_value))))(input)?;
     let (input, _) = ws(tag("}"))(input)?;
@@ -365,14 +368,25 @@ fn extend(input: &str) -> ParserResult<Elem> {
     ))
 }
 
-fn field_options(input: &str) -> ParserResult<()> {
-    let (input, _) = tag("[")(input)?;
-    let (input, _) = ws(option_name)(input)?;
+fn field_option(input: &str) -> ParserResult<Option> {
+    let (input, name) = ws(option_name)(input)?;
     let (input, _) = tag("=")(input)?;
-    let (input, _) = ws(option_value)(input)?;
+    let (input, value) = ws(option_value)(input)?;
+    Ok((
+        input,
+        Option {
+            name: name.to_string(),
+            value,
+        },
+    ))
+}
+
+fn field_options(input: &str) -> ParserResult<Vec<Option>> {
+    let (input, _) = tag("[")(input)?;
+    let (input, vs) = separated_list0(tag(","), field_option)(input)?;
     let (input, _) = tag("]")(input)?;
 
-    Ok((input, ()))
+    Ok((input, vs))
 }
 
 fn message_field(input: &str) -> ParserResult<Field> {
@@ -434,8 +448,9 @@ fn field(input: &str) -> ParserResult<Field> {
         message_field,
         proto_map,
         extensions_field,
+        map_res(option, |v| Ok::<Field, &str>(Field::Option(v))),
         map_res(message, |v| Ok::<Field, &str>(Field::SubMessage(v))),
-        map_res(enum0, |v| Ok::<Field, &str>(Field::SubEnum(v))),
+        map_res(enum_field, |v| Ok::<Field, &str>(Field::SubEnum(v))),
     ))(input)
 }
 
@@ -546,6 +561,10 @@ fn whitespace(input: &str) -> ParserResult<&str> {
     ))))(input)
 }
 
+fn constant(input: &str) -> ParserResult<&str> {
+    recognize(pair(alpha1, many0(alt((alphanumeric1, tag("_"))))))(input)
+}
+
 fn identifier(input: &str) -> ParserResult<&str> {
     recognize(pair(
         alpha1,
@@ -556,7 +575,7 @@ fn identifier(input: &str) -> ParserResult<&str> {
 fn str(input: &str) -> ParserResult<&str> {
     delimited(
         char('"'),
-        escaped(is_not("\\\""), '\\', one_of("\"\n\r")),
+        escaped(is_not("\\\""), '\\', one_of("\"\n\\")),
         char('"'),
     )(input)
 }
@@ -569,7 +588,7 @@ fn parse0<'a>(file_name: &'a str, input: &'a str) -> ParserResult<'a, Proto> {
         extend,
         map_res(option, |v| Ok::<Elem, &str>(Elem::Option(v))),
         map_res(message, |v| Ok::<Elem, &str>(Elem::Message(v))),
-        map_res(enum0, |v| Ok::<Elem, &str>(Elem::Enum(v))),
+        map_res(enum_field, |v| Ok::<Elem, &str>(Elem::Enum(v))),
         service,
     ))))(input)?;
 
